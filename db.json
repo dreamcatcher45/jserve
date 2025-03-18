@@ -1,0 +1,11 @@
+{
+  "posts": [
+    { "id": "1", "title": "Fluffy Felines" },
+    { "id": "2", "title": "Adventures of Whiskers" },
+    { "id": "3", "title": "The Life of a Cat" }
+  ],
+  "activities": [
+    { "id": "1", "title": "Cat Yoga Session" },
+    { "id": "2", "title": "Kitten Playtime" }
+  ]
+}
