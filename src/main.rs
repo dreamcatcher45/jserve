@@ -1,4 +1,3 @@
-// src/main.rs
 use actix_web::{
     delete, get, post, put,
     web::{self, Data, Json, Path},
@@ -15,7 +14,7 @@ use std::{
 use tokio::sync::RwLock;
 use std::process;
 use std::env;
-
+use uuid::Uuid;
 
 type Db = HashMap<String, Vec<Value>>;
 
@@ -87,7 +86,9 @@ async fn get_one(
     match db.get(&resource) {
         Some(items) => items
             .iter()
-            .find(|item| item["id"] == id)
+            .find(|item| {
+                item.get("id").map(|v| v.as_str()) == Some(Some(id.as_str()))
+            })
             .map(|item| HttpResponse::Ok().json(item))
             .ok_or_else(|| {
                 error!("Item not found: {}/{}", resource, id);
@@ -108,40 +109,38 @@ async fn create_item(
     storage: web::Data<JsonFileStorage>,
 ) -> Result<impl Responder, AppError> {
     let resource = path.into_inner();
+    let mut item_value = item.into_inner();
     
-    // Changed from mut item_value to just item_value
-    let item_value = item.into_inner();
     if !item_value.is_object() {
         error!("Invalid JSON format for POST request");
         return Ok(HttpResponse::BadRequest().body("Expected JSON object"));
     }
-
-    // Extract ID as owned String
-    let item_id = match item_value["id"].as_str() {
-        Some(id) => id.to_string(),
-        None => {
-            error!("Missing 'id' field in item");
-            return Ok(HttpResponse::BadRequest().body("Missing 'id' field"));
-        }
-    };
-
+    
+    // Generate ID if missing
+    let item_obj = item_value.as_object_mut().unwrap();
+    if !item_obj.contains_key("id") {
+        let new_id = Uuid::new_v4().to_string();
+        item_obj.insert("id".to_string(), Value::String(new_id));
+    }
+    
+    let item_id = item_obj["id"].as_str().unwrap().to_string();
+    
     let duplicate = {
         let mut db = data.db.write().await;
         let items = db.entry(resource.clone()).or_default();
-        
-        if items.iter().any(|i| i["id"] == item_id) {
+        if items.iter().any(|i| i.get("id").and_then(|v| v.as_str()) == Some(&item_id)) {
             true
         } else {
-            items.push(item_value);
+            items.push(Value::Object(item_obj.clone()));
             false
         }
     };
-
+    
     if duplicate {
         error!("Duplicate ID: {}", item_id);
         return Ok(HttpResponse::Conflict().body("Duplicate ID"));
     }
-
+    
     storage.save().await?;
     Ok(HttpResponse::Created().json(item_id))
 }
@@ -159,12 +158,14 @@ async fn update_item(
         error!("Invalid JSON format for PUT request");
         return Ok(HttpResponse::BadRequest().body("Expected JSON object"));
     }
-
+    
     let result = {
         let mut db = data.db.write().await;
         match db.get_mut(&resource) {
             Some(items) => {
-                if let Some(index) = items.iter().position(|item| item["id"] == id) {
+                if let Some(index) = items.iter().position(|item| 
+                    item.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
+                ) {
                     items[index] = new_item.into_inner();
                     Ok(Some(index))
                 } else {
@@ -174,7 +175,7 @@ async fn update_item(
             None => Ok(None)
         }
     };
-
+    
     match result {
         Ok(Some(_)) => {
             storage.save().await?;
@@ -195,12 +196,14 @@ async fn delete_item(
     storage: web::Data<JsonFileStorage>,
 ) -> Result<impl Responder, AppError> {
     let (resource, id) = path.into_inner();
-
+    
     let deleted = {
         let mut db = data.db.write().await;
         match db.get_mut(&resource) {
             Some(items) => {
-                if let Some(index) = items.iter().position(|item| item["id"] == id) {
+                if let Some(index) = items.iter().position(|item| 
+                    item.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
+                ) {
                     Some(items.remove(index))
                 } else {
                     None
@@ -209,7 +212,7 @@ async fn delete_item(
             None => None
         }
     };
-
+    
     match deleted {
         Some(item) => {
             storage.save().await?;
@@ -226,20 +229,44 @@ async fn load_db(file_path: &str) -> Result<Db> {
     let content = tokio::fs::read_to_string(file_path)
         .await
         .context("Failed to read database file")?;
-    let db: Db = from_str(&content)
-        .context("Invalid JSON structure. Expected top-level object with arrays")?;
     
-    for (resource, items) in &db {
-        for (idx, item) in items.iter().enumerate() {
-            if !item["id"].is_string() {
-                anyhow::bail!(
-                    "Invalid data in {} at index {}: Missing or invalid 'id' field",
-                    resource,
-                    idx
-                );
+    let db_value: Value = from_str(&content)
+        .context("Failed to parse JSON")?;
+
+    let mut db = Db::new();
+
+    if let Value::Object(map) = db_value {
+        for (resource, value) in map {
+            match value {
+                Value::Array(arr) => {
+                    let mut validated_arr = Vec::new();
+                    for item in arr {
+                        if let Value::Object(obj) = item {
+                            validated_arr.push(Value::Object(obj));
+                        } else {
+                            anyhow::bail!(
+                                "Item in resource '{}' is not a JSON object",
+                                resource
+                            );
+                        }
+                    }
+                    db.insert(resource, validated_arr);
+                }
+                Value::Object(obj) => {
+                    db.insert(resource, vec![Value::Object(obj)]);
+                }
+                _ => {
+                    anyhow::bail!(
+                        "Resource '{}' is of invalid type - must be array or object",
+                        resource
+                    );
+                }
             }
         }
+    } else {
+        anyhow::bail!("Top-level JSON must be an object");
     }
+
     Ok(db)
 }
 
@@ -251,7 +278,6 @@ async fn main() -> Result<()> {
     let mut file_path = None;
     let mut port = 3000;
 
-    // Handle help and version first
     for arg in &args {
         match arg.as_str() {
             "-h" | "--help" => {
@@ -298,26 +324,25 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Add help text function
-    fn print_help(_program_name: &str) {
+    fn print_help(program_name: &str) {
         println!("\nJServe - JSON REST server built in rust");
         println!("Version: {}\n", env!("CARGO_PKG_VERSION"));
-        println!("Options:");
-        println!("  -f <FILE>    JSON file to use as database (required)");
-        println!("  -p <PORT>    Port to listen on (default: 3000)");
-        println!("  -v           Show version information");
-        println!("  -h           Show this help message\n");
-        println!("Website: https://dreamcatcher45.github.io/jserve");
-        println!("GitHub:  https://github.com/dreamcatcher45/jserve\n");
+        println!("Usage: {} [OPTIONS]", program_name);
+        println!("\nOptions:");
+        println!("  -f <FILE>\tJSON file to use as database (required)");
+        println!("  -p <PORT>\tPort to listen on (default: 3000)");
+        println!("  -v\t\tShow version information");
+        println!("  -h\t\tShow this help message\n");
+        println!("Website: https://github.com/yourusername/jserve");
+        println!("GitHub: https://github.com/yourusername/jserve");
     }
 
     let file_path = file_path.unwrap_or_else(|| {
-        eprintln!("Error: Missing required -f argument. ");
+        eprintln!("Error: Missing required -f argument");
         process::exit(1);
     });
 
     let path = StdPath::new(&file_path);
-    
     if !path.exists() {
         tokio::fs::write(path, "{}")
             .await
@@ -330,7 +355,7 @@ async fn main() -> Result<()> {
         file_path: file_path.clone(),
     });
 
-    let base_url = format!("http://127.0.0.1:{}", port);
+    let base_url = format!("http://localhost:{}", port);
     println!("\nAvailable endpoints:");
     {
         let db = state.db.read().await;
@@ -341,7 +366,7 @@ async fn main() -> Result<()> {
     println!("\nServer running at {}", base_url);
 
     let storage = web::Data::new(JsonFileStorage::new(state.clone()));
-
+    
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
