@@ -15,6 +15,8 @@ use tokio::sync::RwLock;
 use std::process;
 use std::env;
 use uuid::Uuid;
+use actix_cors::Cors;
+
 
 type Db = HashMap<String, Vec<Value>>;
 
@@ -22,7 +24,6 @@ struct AppState {
     db: Arc<RwLock<Db>>,
     file_path: String,
 }
-
 #[derive(Debug)]
 struct AppError(anyhow::Error);
 
@@ -368,7 +369,14 @@ async fn main() -> Result<()> {
     let storage = web::Data::new(JsonFileStorage::new(state.clone()));
     
     HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .supports_credentials();
+    
         App::new()
+            .wrap(cors)
             .app_data(state.clone())
             .app_data(storage.clone())
             .service(get_all)
