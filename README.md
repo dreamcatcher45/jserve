@@ -144,9 +144,3 @@ Please follow Rust coding conventions and document complex logic.
 ## License 📜
 
 MIT License - see [LICENSE](LICENSE) file for details
-
----
-
-**Happy Hacking!** 👩💻👨💻  
-*Let your JSON fly with JServe's RESTful wings!* 🕊️
-```
