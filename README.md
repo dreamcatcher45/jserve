@@ -1,4 +1,3 @@
-
 # JServe 🚀
 
 A **lightning-fast**, **RESTful JSON server** built with Rust ⚙️, designed for prototyping and mock APIs. Store and manage data effortlessly using a simple JSON file! 📁
@@ -18,6 +17,12 @@ A **lightning-fast**, **RESTful JSON server** built with Rust ⚙️, designed f
 
 
 ## Installation 📥
+
+**Using Cargo**:
+```bash
+# Install directly from crates.io
+cargo install jserve
+```
 
 **Pre-built Binaries** (Recommended):
 1. Visit [GitHub Releases](https://github.com/dreamcatcher45/jserve/releases)
